@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.EventSystems;
 #if UNITY_EDITOR
 using UnityEditor;
 #endif
@@ -10,6 +11,7 @@ public class playerController : MonoBehaviour
     [Header("Pick Camera Mode")] // gives ability to chose camera mode for different games
     public bool firstNThirdPerspective;
     public bool topDownPerspective;
+    public bool sideScrollPerspective;
     public bool pcInputSystem;
     public bool mobileInputSystem;
 
@@ -33,6 +35,8 @@ public class playerController : MonoBehaviour
     public float cameraCorrectionSpeed;
     private float currentPitchY;
     private float currentPitchX;
+    private Vector2 mobileCamRotation = Vector2.zero;
+    private bool topDownCamInitialised = false; 
 
     [Header("Movement Variables")] // variables to control movement of player
     public float playerCurrentSpeed;
@@ -52,12 +56,15 @@ public class playerController : MonoBehaviour
     private bool moveLeft;
     private bool moveBack;
     private bool moveUp;
+    public bool isJumping;
 
     [Header("Misc")] // generic features to be manipulated
     public bool contraintAxis;
     public bool playerGrounded;
     public string tagForGround;
     private Vector3 directionToPlayer;
+    private Vector2 lastTouchPos;
+    private bool isDragging = false;
 
     [Header("KeyBinds")]
     public string keyForForward;
@@ -67,7 +74,17 @@ public class playerController : MonoBehaviour
     public string keyForJump;
     public string keyForSprint;
     public string keyForCamChange;
+
+    [Header("Mobile Input System")]
+    [SerializeField] private Joystick joystick;
     
+    // function for setting stats if needed
+    public void setMovementVariables(float playerSpd)
+    {
+        playerCurrentSpeed = playerSpd * 100;
+        Debug.Log("playerCurrentSpeed is: " + playerCurrentSpeed);
+    }
+
     // Start is called before the first frame update
     void Start()
     {
@@ -76,11 +93,12 @@ public class playerController : MonoBehaviour
         {
             playerCapsuleCollider = GetComponent<CapsuleCollider>();
             playerRigidbody = GetComponent<Rigidbody>();
+            cameraOffset = player3rdCamera.transform.position - player.transform.position;
 
             // locks the rotation of player so they do not 'fall over'
             if (contraintAxis)
             {
-                playerRigidbody.constraints = RigidbodyConstraints.FreezeRotationZ | RigidbodyConstraints.FreezeRotationX;
+                playerRigidbody.constraints = RigidbodyConstraints.FreezeRotationZ | RigidbodyConstraints.FreezeRotationX | RigidbodyConstraints.FreezeRotationY;
             }
         }
         if ((firstNThirdPerspective && topDownPerspective) || (pcInputSystem && mobileInputSystem)) // checks if more than once perspective or input system is selected for debugging
@@ -105,6 +123,11 @@ public class playerController : MonoBehaviour
                     player1stCamera.gameObject.SetActive(false);
                     player3rdCamera.gameObject.SetActive(false);
                     topDownCamera.gameObject.SetActive(true);
+                } else if (sideScrollPerspective)
+                {
+                    player1stCamera.gameObject.SetActive(true);
+                    player3rdCamera.gameObject.SetActive(false);
+                    topDownCamera.gameObject.SetActive(false);
                 }
             }
         }
@@ -126,7 +149,7 @@ public class playerController : MonoBehaviour
         } else if (topDownPerspective)
         {
             topDownCamMovement();
-        }
+        } 
     }
 
     void FixedUpdate() // calls in sync with physics systsyem
@@ -138,7 +161,10 @@ public class playerController : MonoBehaviour
             adjustSpeedForFall();
         } else if (topDownPerspective)
         {
-            topDownMovvement();
+            topDownMovement();
+        } else if (sideScrollPerspective)
+        {
+            sideScrollMovement();
         }
     }
 
@@ -169,11 +195,63 @@ public class playerController : MonoBehaviour
         {
             moveRight = true;
         }else { moveRight = false; }
+
+        if (Input.GetKey(keyForJump.ToLower()))
+        {
+            isJumping = true;
+        }else { isJumping = false; }
     }
 
-    void handleMobileInput()
+    void handleMobileInput() // handles mobile inputs 
     {
+        Vector2 input = joystick.Direction;
 
+        moveForward = input.y > 0.1f;
+        moveBack = input.y < -0.1f;
+        moveRight = input.x > 0.1f;
+        moveLeft = input.x < -0.1f;
+
+        // camera input check
+        if (Input.touchCount > 0)
+        {
+            for (int i = 0; i < Input.touchCount; i++) // loops through for multiple touches
+            {
+                Touch touch = Input.GetTouch(i);
+                if (EventSystem.current.IsPointerOverGameObject(touch.fingerId)) // detects if even is on ui element or not
+                {
+                    continue;
+                }
+                if (touch.position.x > Screen.width / 2) // only gets input on right side of screen
+                {
+                    if (touch.phase == TouchPhase.Began) // detects if touch is happening
+                    {
+                        lastTouchPos = touch.position;
+                        isDragging = true;
+                    }
+                    else if (touch.phase == TouchPhase.Moved && isDragging)
+                    {
+                        Vector2 camRot = touch.position - lastTouchPos;
+                        lastTouchPos = touch.position;
+
+                        mobileCamRotation = camRot;
+                    }
+                    else if (touch.phase == TouchPhase.Ended || touch.phase == TouchPhase.Canceled) // detects if touch has ended
+                    {
+                        isDragging = false;
+                        mobileCamRotation = Vector2.zero;
+                    }
+                    break;
+                }
+            } 
+        } else
+        {
+            mobileCamRotation = Vector2.zero;
+        }
+    }
+
+    public void mobileJumpBtn() // this function is for when a mobile jump button is needed
+    {
+        isJumping = true;
     }
 
     void Movement() // controls vector for player movement
@@ -226,10 +304,10 @@ public class playerController : MonoBehaviour
 
         if (Input.GetKey(keyForSprint.ToLower()) && !isMovingBack) // checks player is not moving backwards
         {
-            playerRigidbody.velocity = (moveDirection * playerSprintSpeed * Time.deltaTime + Vector3.up * currentVelocity.y); // adds movement to rigidbody using velocity
+            playerRigidbody.velocity = (moveDirection * playerSprintSpeed * Time.fixedDeltaTime + Vector3.up * currentVelocity.y); // adds movement to rigidbody using velocity
         } else
         {
-            playerRigidbody.velocity = (moveDirection * playerCurrentSpeed * Time.deltaTime + Vector3.up * currentVelocity.y); // adds movement to rigidbody using velocity
+            playerRigidbody.velocity = (moveDirection * playerCurrentSpeed * Time.fixedDeltaTime + Vector3.up * currentVelocity.y); // adds movement to rigidbody using velocity
         }
 
         if (playerRigidbody.velocity == new Vector3(0,0,0)) // checks wether the player is moving and changes a bool to be used as a flag for other methods
@@ -243,15 +321,18 @@ public class playerController : MonoBehaviour
 
     void jump() // Handles logic for jump by adding force to rigid body as long as charcter is grounded
     {
-       if (Input.GetKeyDown(keyForJump.ToLower()) && playerGrounded)
+       if (isJumping && playerGrounded)
         {
             playerRigidbody.velocity = (Vector3.up * playerJumpForce); // applies force upwards for jump making use of impulse mode for quick pulse upwards
             playerGrounded = false;
             jumpCount++;
-        }else if (Input.GetKeyDown(keyForJump.ToLower()) && !playerGrounded && jumpCount < 2) // checks if character in the air and if the jump count is below 2 for double jump
+            isJumping = false;
+        }
+        else if (isJumping && !playerGrounded && jumpCount < 2) // checks if character in the air and if the jump count is below 2 for double jump
         {
             playerRigidbody.velocity = (Vector3.up * playerJumpForce); 
             jumpCount++;
+            isJumping = false;
         }
     }
 
@@ -282,6 +363,12 @@ public class playerController : MonoBehaviour
 
         float mouseX = Input.GetAxis("Mouse X"); // gets input of mouse movement
         float mouseY = Input.GetAxis("Mouse Y");
+        // for mobile input
+        if (mobileInputSystem)
+        {
+            mouseX = mobileCamRotation.x * 0.1f;
+            mouseY = mobileCamRotation.y * 0.1f;
+        }
 
         // calculating rotations
         float rotationX = mouseX * thirdCameraSensitivity * Time.deltaTime;
@@ -308,30 +395,22 @@ public class playerController : MonoBehaviour
             player.transform.Rotate(0, rotation1stX, 0); // for first person
         }else // for third person
         {
-            if (!isMoving) // rotate camera around when character not moving for entire view of character
-            {
-                player3rdCamera.transform.RotateAround(playerPosition, Vector3.up, rotationX);
-                player3rdCamera.transform.rotation = Quaternion.Slerp(player3rdCamera.transform.rotation, lookAtPlayer, cameraCorrectionSpeed * Time.deltaTime);
-                cameraOffset = playerPosition - currentCamPos; // calculates the offset for when moving
-            }
-            else if (isMoving) // more natural camera movement for when player is in action
-            {
-                // ----- this is the problem? --- camera not clamping, set rotation of character to match x when moving, stop camera rolling on Z ///
-                Vector3 desiredCamPos = playerPosition - cameraOffset; // calculates camera position for when following
-                player3rdCamera.transform.position = Vector3.Lerp(currentCamPos, desiredCamPos, cameraCorrectionSpeed * Time.deltaTime); // for camera follow
-                player3rdCamera.transform.Rotate(clampedCameraX, clampedCameraY, 0); // applies rotation on x and y axis in bounds of clamping
-            }
+            Quaternion rotation = Quaternion.Euler(clampedCameraX, rotationX, 0f); // calc needed rotation
+            cameraOffset = rotation * cameraOffset; // apply rotation to cam offset
+            Vector3 desiredCamPos = playerPosition + cameraOffset; // calculates camera position for when following
+            player3rdCamera.transform.position = Vector3.Lerp(currentCamPos, desiredCamPos, cameraCorrectionSpeed * Time.deltaTime); // apply calculated cam pos
+            player3rdCamera.transform.rotation = Quaternion.Slerp(player3rdCamera.transform.rotation, lookAtPlayer, cameraCorrectionSpeed * Time.deltaTime); // apply calc cam rotation
         }
     }
     // top down code
-    void topDownMovvement()
+    void topDownMovement()
     {
         currentVelocity = playerRigidbody.velocity;
 
         moveDirection = Vector3.zero; // creates Vector and sets to zero for no movement
 
         // get the forward angle of the camera for player rotation when initial movement from still
-        Vector3 cameraForward = topDownCamera.transform.forward;
+        Vector3 cameraForward = topDownCamera.transform.up;
         cameraForward.y = 0;
         cameraForward.Normalize();
         // get the right angle of camera for player rotation 
@@ -345,22 +424,22 @@ public class playerController : MonoBehaviour
         playerRight.Normalize();
 
         // Check for input and set moveDirection accordingly
-        if (Input.GetKey(keyForForward.ToLower())) // Move forward 
+        if (moveForward) // Move forward 
         {
             moveDirection += cameraForward;
             isMovingBack = false;
         }
-        if (Input.GetKey(keyForBackward.ToLower())) // Move back
+        if (moveBack) // Move back
         {
             moveDirection -= cameraForward;
             isMovingBack = true;
         }
-        if (Input.GetKey(keyForLeft.ToLower())) // Move left
+        if (moveLeft) // Move left
         {
             moveDirection -= cameraRight;
             isMovingBack = false;
         }
-        if (Input.GetKey(keyForRight.ToLower())) // Move right
+        if (moveRight) // Move right
         {
             moveDirection += cameraRight;
             isMovingBack = false;
@@ -375,13 +454,13 @@ public class playerController : MonoBehaviour
             player.transform.rotation = Quaternion.Slerp(player.transform.rotation, targetRotation, playerRotationSpeed * Time.deltaTime);
         }
 
-        if (Input.GetKey(keyForSprint.ToLower()) && !isMovingBack) // checks player is not moving backwards
+        if (Input.GetKey(keyForSprint.ToLower())) // checks for sprint
         {
-            playerRigidbody.velocity = (moveDirection * playerSprintSpeed * Time.deltaTime + Vector3.up * currentVelocity.y); // adds movement to rigidbody using velocity
+            playerRigidbody.velocity = (moveDirection * playerSprintSpeed * Time.fixedDeltaTime + Vector3.up * currentVelocity.y); // adds movement to rigidbody using velocity
         }
         else
         {
-            playerRigidbody.velocity = (moveDirection * playerCurrentSpeed * Time.deltaTime + Vector3.up * currentVelocity.y); // adds movement to rigidbody using velocity
+            playerRigidbody.velocity = (moveDirection * playerCurrentSpeed * Time.fixedDeltaTime + Vector3.up * currentVelocity.y); // adds movement to rigidbody using velocity
         }
 
         if (playerRigidbody.velocity == new Vector3(0, 0, 0)) // checks wether the player is moving and changes a bool to be used as a flag for other methods
@@ -393,14 +472,42 @@ public class playerController : MonoBehaviour
             isMoving = true;
         }
     }
-
+    // called for the top down movement mode
     void topDownCamMovement()
     {
         Vector3 playerPosition = player.transform.position; // takes the players position and stores it in a vector
         Vector3 currentCamPos = topDownCamera.transform.position; // gets current camera position
-
-        cameraOffset = playerPosition - currentCamPos; // calculates the offset for when moving
-        Vector3 desiredCamPos = playerPosition - cameraOffset; // calculates camera position for when following
-        topDownCamera.transform.position = Vector3.Lerp(currentCamPos, desiredCamPos, cameraCorrectionSpeed * Time.deltaTime);
+        if (!topDownCamInitialised)
+        {
+            cameraOffset = playerPosition - currentCamPos; // calculates the offset for when moving
+            topDownCamInitialised = true;
+        } else
+        {
+            Vector3 desiredCamPos = playerPosition - cameraOffset; // calculates camera position for when following
+            topDownCamera.transform.position = desiredCamPos;
+        }
+    }
+    // called for the side scroll movement mode
+    void sideScrollMovement()
+    {
+        currentVelocity = playerRigidbody.velocity;
+        moveDirection = Vector3.zero; // creates Vector and sets to zero for no movement
+        // get the right angle of camera for player rotation 
+        Vector3 cameraRight = player3rdCamera.transform.right;
+        cameraRight.y = 0;
+        cameraRight.Normalize();
+        // Check for input and set moveDirection accordingly
+        if (moveLeft) // Move left
+        {
+            moveDirection -= cameraRight;
+            isMovingBack = false;
+        }
+        if (moveRight) // Move right
+        {
+            moveDirection += cameraRight;
+            isMovingBack = false;
+        }
+        moveDirection = moveDirection.normalized; // avoids diagonal speed boost
+        playerRigidbody.velocity = (moveDirection * playerCurrentSpeed * Time.fixedDeltaTime + Vector3.up * currentVelocity.y); // adds movement to rigidbody using velocity
     }
 }
